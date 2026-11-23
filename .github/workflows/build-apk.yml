@@ -24,6 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
       - name: Organize folders
         run: |
           mkdir -p www assets
@@ -38,18 +39,192 @@ jobs:
           npm install -D @capacitor/assets
           npx capacitor-assets generate --android
 
-      - name: Add Android alarm & notification permissions
+      - name: Add Native AlarmClock Plugin & Permissions
         run: |
           python3 - << 'EOF'
-          p = "android/app/src/main/AndroidManifest.xml"
-          s = open(p).read()
+          import os
+          pkg_dir = "android/app/src/main/java/com/sam/personaltracker"
+          os.makedirs(pkg_dir, exist_ok=True)
+
+          receiver_java = '''package com.sam.personaltracker;
+
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.media.AudioAttributes;
+          import android.media.MediaPlayer;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.Looper;
+          import androidx.core.app.NotificationCompat;
+
+          public class AlarmReceiver extends BroadcastReceiver {
+              public static final String ACTION_STOP = "com.sam.personaltracker.STOP_ALARM";
+              private static MediaPlayer player;
+
+              public static synchronized void stopRingtone() {
+                  if (player != null) {
+                      try {
+                          if (player.isPlaying()) player.stop();
+                          player.release();
+                      } catch (Exception ignored) {}
+                      player = null;
+                  }
+              }
+
+              private static synchronized void startRingtone(Context ctx) {
+                  stopRingtone();
+                  try {
+                      Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+                      if (uri == null) uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                      player = new MediaPlayer();
+                      player.setDataSource(ctx, uri);
+                      player.setAudioAttributes(new AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_ALARM)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                          .build());
+                      player.setLooping(true);
+                      player.prepare();
+                      player.start();
+                      new Handler(Looper.getMainLooper()).postDelayed(AlarmReceiver::stopRingtone, 45000);
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  int id = intent.getIntExtra("id", 1);
+                  NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (ACTION_STOP.equals(intent.getAction())) {
+                      stopRingtone();
+                      if (nm != null) nm.cancel(id);
+                      return;
+                  }
+
+                  String label = intent.getStringExtra("label");
+                  if (label == null || label.isEmpty()) label = "Time for your habit!";
+                  startRingtone(context);
+
+                  String chId = "sam_alarm_clock";
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
+                      NotificationChannel ch = new NotificationChannel(chId, "Habit Alarm Clock", NotificationManager.IMPORTANCE_HIGH);
+                      ch.setSound(null, null);
+                      ch.enableVibration(true);
+                      nm.createNotificationChannel(ch);
+                  }
+
+                  Intent openIntent = new Intent(context, MainActivity.class);
+                  openIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                  PendingIntent openPi = PendingIntent.getActivity(context, id, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  Intent stopIntent = new Intent(context, AlarmReceiver.class);
+                  stopIntent.setAction(ACTION_STOP);
+                  stopIntent.putExtra("id", id);
+                  PendingIntent stopPi = PendingIntent.getBroadcast(context, id + 10000, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  NotificationCompat.Builder b = new NotificationCompat.Builder(context, chId)
+                      .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                      .setContentTitle("Sam Personal Tracker")
+                      .setContentText(label)
+                      .setPriority(NotificationCompat.PRIORITY_MAX)
+                      .setCategory(NotificationCompat.CATEGORY_ALARM)
+                      .setAutoCancel(true)
+                      .setContentIntent(openPi)
+                      .setDeleteIntent(stopPi)
+                      .addAction(0, "Stop Alarm", stopPi);
+
+                  if (nm != null) nm.notify(id, b.build());
+              }
+          }
+          '''
+
+          plugin_java = '''package com.sam.personaltracker;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+
+          @CapacitorPlugin(name = "NativeAlarm")
+          public class AlarmPlugin extends Plugin {
+              @PluginMethod
+              public void setAlarm(PluginCall call) {
+                  int id = call.getInt("id", 1);
+                  long triggerAtMs = call.getDouble("triggerAtMs", (double) System.currentTimeMillis()).longValue();
+                  String label = call.getString("label", "Habit Reminder");
+
+                  Context ctx = getContext();
+                  AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+                  Intent intent = new Intent(ctx, AlarmReceiver.class);
+                  intent.putExtra("id", id);
+                  intent.putExtra("label", label);
+                  PendingIntent pi = PendingIntent.getBroadcast(ctx, id, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  Intent showIntent = new Intent(ctx, MainActivity.class);
+                  PendingIntent showPi = PendingIntent.getActivity(ctx, 0, showIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  if (am != null) {
+                      am.setAlarmClock(new AlarmManager.AlarmClockInfo(triggerAtMs, showPi), pi);
+                  }
+                  call.resolve();
+              }
+
+              @PluginMethod
+              public void cancelAlarm(PluginCall call) {
+                  int id = call.getInt("id", 1);
+                  Context ctx = getContext();
+                  AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+                  Intent intent = new Intent(ctx, AlarmReceiver.class);
+                  PendingIntent pi = PendingIntent.getBroadcast(ctx, id, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                  if (am != null) am.cancel(pi);
+                  call.resolve();
+              }
+
+              @PluginMethod
+              public void stopAlarm(PluginCall call) {
+                  AlarmReceiver.stopRingtone();
+                  call.resolve();
+              }
+          }
+          '''
+
+          main_java = '''package com.sam.personaltracker;
+
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(AlarmPlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          }
+          '''
+
+          open(os.path.join(pkg_dir, "AlarmReceiver.java"), "w").write(receiver_java)
+          open(os.path.join(pkg_dir, "AlarmPlugin.java"), "w").write(plugin_java)
+          open(os.path.join(pkg_dir, "MainActivity.java"), "w").write(main_java)
+
+          mp = "android/app/src/main/AndroidManifest.xml"
+          ms = open(mp).read()
           perms = '''    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-                     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    
-              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />'''
-          if "SCHEDULE_EXACT_ALARM" not in s:
-              s = s.replace("<application", perms + "\n    <application", 1)
-              open(p, "w").write(s)
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />'''
+          if "USE_EXACT_ALARM" not in ms:
+              ms = ms.replace("<application", perms + "\n    <application", 1)
+          if "AlarmReceiver" not in ms:
+              ms = ms.replace("</application>", '        <receiver android:name=".AlarmReceiver" android:exported="false" />\n    </application>', 1)
+          open(mp, "w").write(ms)
           EOF
 
       - name: Sync Capacitor
