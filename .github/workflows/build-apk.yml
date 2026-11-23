@@ -24,6 +24,11 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+      - name: Organize folders
+        run: |
+          mkdir -p www assets
+          cp index.html www/index.html
+          cp icon.png icon-only.png assets/
 
       - name: Add Android platform
         run: npx cap add android
