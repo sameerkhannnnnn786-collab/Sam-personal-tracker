@@ -1,0 +1,6 @@
+{
+  "appId": "com.sam.personaltracker",
+  "appName": "Sam personal tracker",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}

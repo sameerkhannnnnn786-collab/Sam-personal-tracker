@@ -1,0 +1,16 @@
+{
+  "name": "sam-personal-tracker",
+  "version": "1.0.0",
+  "description": "Sam Personal Tracker - Habit Tracker with Closed-App Alarms",
+  "scripts": {
+    "cap:sync": "npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/local-notifications": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
